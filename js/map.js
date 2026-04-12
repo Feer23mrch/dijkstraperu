@@ -125,56 +125,86 @@ function resetAllMarkers() {
 }
 
 /**
- * Dibuja la ruta óptima y enmarca el bounding box.
+ * Dibuja la ruta óptima siguiendo las carreteras reales usando OSRM
+ * y enmarca el bounding box.
  * @param {string[]} ruta - Array de IDs de departamentos
  */
-function drawRoute(ruta) {
+async function drawRoute(ruta) {
   clearRoute();
 
+  // 1. Extraer coordenadas originales de los departamentos
   const path = ruta.map(id => ({
     lat: DEPARTAMENTOS[id].lat,
     lng: DEPARTAMENTOS[id].lng,
   }));
 
-  // Polyline animada (ruta óptima)
-  routePolyline = new google.maps.Polyline({
-    path,
-    strokeColor:   COLOR_RUTA,
-    strokeOpacity: 1,
-    strokeWeight:  4,
-    icons: [
-      {
-        icon:   { path: google.maps.SymbolPath.FORWARD_CLOSED_ARROW, scale: 4 },
-        offset: "100%",
-        repeat: "120px",
-      },
-    ],
-    map,
-  });
+  // 2. Preparar el string de coordenadas para la API de OSRM
+  // OSRM requiere el formato: longitud,latitud;longitud,latitud
+  const coordsStr = ruta.map(id => {
+    const dep = DEPARTAMENTOS[id];
+    return `${dep.lng},${dep.lat}`;
+  }).join(';');
 
-  // Bounding box (rectángulo azul como en la imagen)
-  bounds = new google.maps.LatLngBounds();
-  path.forEach(p => bounds.extend(p));
-  map.fitBounds(bounds, { padding: 80 });
+  try {
+    // 3. Consultar la API pública y gratuita de trazado de carreteras
+    const url = `https://router.project-osrm.org/route/v1/driving/${coordsStr}?overview=full&geometries=geojson`;
+    const response = await fetch(url);
+    const data = await response.json();
 
-  // Rectángulo visual alrededor de la ruta
-  highlightPolyline = new google.maps.Rectangle({
-    bounds,
-    strokeColor:   "#2563EB",
-    strokeOpacity: 0.9,
-    strokeWeight:  3,
-    fillColor:     "#2563EB",
-    fillOpacity:   0.06,
-    map,
-  });
+    let routeCoordinates = path; // Fallback: usamos línea recta por si la API falla
 
-  // Colorear nodos de la ruta
-  resetAllMarkers();
-  ruta.forEach((id, i) => {
-    if      (i === 0)           setMarkerStyle(id, "origen");
-    else if (i === ruta.length - 1) setMarkerStyle(id, "destino");
-    else                        setMarkerStyle(id, "paso");
-  });
+    // Si la API responde correctamente, extraemos los puntos de la carretera
+    if (data.code === 'Ok' && data.routes.length > 0) {
+      routeCoordinates = data.routes[0].geometry.coordinates.map(coord => ({
+        lat: coord[1], 
+        lng: coord[0]
+      }));
+    }
+
+    // 4. Dibujar la Polyline con todas las curvas de la carretera
+    routePolyline = new google.maps.Polyline({
+      path: routeCoordinates,
+      strokeColor:   COLOR_RUTA,
+      strokeOpacity: 1,
+      strokeWeight:  4,
+      // Opcional: reducimos un poco la repetición de flechas porque ahora hay más curvas
+      icons: [
+        {
+          icon:   { path: google.maps.SymbolPath.FORWARD_CLOSED_ARROW, scale: 3 },
+          offset: "50%",
+          repeat: "150px",
+        },
+      ],
+      map,
+    });
+
+    // 5. Enmarcar el mapa (Bounding box) ajustado a las curvas
+    bounds = new google.maps.LatLngBounds();
+    routeCoordinates.forEach(p => bounds.extend(p));
+    map.fitBounds(bounds, { padding: 80 });
+
+    // Rectángulo visual alrededor de la ruta
+    highlightPolyline = new google.maps.Rectangle({
+      bounds,
+      strokeColor:   "#2563EB",
+      strokeOpacity: 0.9,
+      strokeWeight:  3,
+      fillColor:     "#2563EB",
+      fillOpacity:   0.06,
+      map,
+    });
+
+    // 6. Colorear nodos de la ruta
+    resetAllMarkers();
+    ruta.forEach((id, i) => {
+      if      (i === 0)           setMarkerStyle(id, "origen");
+      else if (i === ruta.length - 1) setMarkerStyle(id, "destino");
+      else                        setMarkerStyle(id, "paso");
+    });
+
+  } catch (error) {
+    console.error("Error al obtener la ruta de carreteras:", error);
+  }
 }
 
 /** Limpia la ruta del mapa */
